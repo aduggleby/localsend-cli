@@ -16,7 +16,7 @@ use std::path::PathBuf;
     name = "localsend-cli",
     version,
     about = "Headless LocalSend CLI",
-    long_about = "A fully non-interactive LocalSend CLI for automation and LLM control.\n\nCapabilities:\n  - Discover devices on the local network\n  - Send text, files, directories, or globbed file lists\n  - Receive files with auto-accept and optional PIN\n\nAll options are provided as flags; no prompts are used.",
+    long_about = "A fully non-interactive LocalSend CLI for automation and LLM control.\n\nCapabilities:\n  - Discover devices on the local network\n  - Send text, files, directories, or globbed file lists\n  - Receive files with auto-accept and optional PIN\n  - QR web-share fallback when discovery fails\n\nAll options are provided as flags; no prompts are used.",
     after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli search --to \"alex-thinkpad-2024\"\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli send --to \"Alice\" --file ./photo.jpg --qr\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
 )]
 struct Cli {
@@ -94,7 +94,7 @@ enum Commands {
         #[arg(long)]
         direct: Option<String>,
 
-        /// If no matching device is found, start a QR web share fallback.
+        /// If no matching device is found, start a QR web share fallback (HTTPS, auto-accept).
         #[arg(long, default_value_t = false)]
         qr: bool,
     },
