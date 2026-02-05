@@ -1,1 +1,4 @@
 /target
+coverage/
+coverage.*
+cobertura.xml
