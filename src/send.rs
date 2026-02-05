@@ -71,6 +71,11 @@ pub(crate) async fn send_prepared_items(
         return Err(anyhow!("no files, directories, or text specified"));
     }
 
+    if !json {
+        println!("Preparing upload...");
+        println!("Waiting for receiver response...");
+    }
+
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(timeout))
@@ -137,6 +142,12 @@ pub(crate) async fn send_prepared_items(
                 println!("Sent message");
             }
             return Ok(());
+        }
+        if response.status() == StatusCode::CONFLICT {
+            if !json {
+                println!("Receiver is busy or waiting on another session.");
+            }
+            return Err(anyhow!("prepare-upload failed: {}", response.status()));
         }
         if !response.status().is_success() {
             return Err(anyhow!("prepare-upload failed: {}", response.status()));
