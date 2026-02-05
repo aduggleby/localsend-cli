@@ -2,6 +2,13 @@
 
 Headless, non-interactive LocalSend CLI for Linux/macOS/Windows. Designed for LLM automation and scripting: no prompts, deterministic exit codes, optional JSON output.
 
+## Install (GitHub Releases)
+
+```bash
+curl -fsSL https://github.com/aduggleby/localsend-cli/releases/latest/download/localsend-cli-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m).tar.gz | tar -xz
+sudo install -m 755 localsend-cli /usr/local/bin/localsend-cli
+```
+
 ## Features
 
 - Fully non-interactive (all behavior controlled by flags)
