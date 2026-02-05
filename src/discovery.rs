@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use socket2::{Domain, Protocol as SockProtocol, Socket, Type};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -243,6 +244,8 @@ async fn scan_subnets(
         let _ = handle.await;
     }
 
+    scan_tailscale_peers(device_info.clone(), devices.clone()).await?;
+
     Ok(())
 }
 
@@ -255,4 +258,60 @@ fn device_id(info: &DeviceInfo, addr: IpAddr) -> String {
     hasher.update(addr.to_string().as_bytes());
     hasher.update(info.port.to_string().as_bytes());
     hex::encode(hasher.finalize())
+}
+
+async fn scan_tailscale_peers(
+    device_info: DeviceInfo,
+    devices: Arc<Mutex<HashMap<String, DiscoveredDevice>>>,
+) -> anyhow::Result<()> {
+    let output = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output();
+    let Ok(output) = output else { return Ok(()) };
+    if !output.status.success() {
+        return Ok(());
+    }
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return Ok(());
+    };
+    let Some(peers) = json.get("Peer") else { return Ok(()) };
+    let Some(peer_map) = peers.as_object() else { return Ok(()) };
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_millis(500))
+        .build()?;
+
+    for peer in peer_map.values() {
+        let Some(ips) = peer.get("TailscaleIPs").and_then(|v| v.as_array()) else { continue };
+        for ip_val in ips {
+            let Some(ip_str) = ip_val.as_str() else { continue };
+            let Ok(ip) = ip_str.parse::<IpAddr>() else { continue };
+            if !matches!(ip, IpAddr::V4(_)) {
+                continue;
+            }
+            let url = format!(
+                "{}://{}:{}/api/localsend/v2/register",
+                device_info.protocol, ip, device_info.port
+            );
+            let response = client.post(url).json(&device_info).send().await.ok();
+            let Some(response) = response else { continue };
+            if !response.status().is_success() {
+                continue;
+            }
+            let Ok(device) = response.json::<DeviceInfo>().await else { continue };
+            let id = device_id(&device, ip);
+            let mut devices_lock = devices.lock().expect("devices lock");
+            devices_lock.insert(
+                id.clone(),
+                DiscoveredDevice {
+                    id,
+                    info: device,
+                    addr: ip,
+                },
+            );
+        }
+    }
+
+    Ok(())
 }
