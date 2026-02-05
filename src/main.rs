@@ -11,7 +11,13 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "localsend-cli", version, about = "Headless LocalSend CLI")]
+#[command(
+    name = "localsend-cli",
+    version,
+    about = "Headless LocalSend CLI",
+    long_about = "A fully non-interactive LocalSend CLI for automation and LLM control.\n\nCapabilities:\n  - Discover devices on the local network\n  - Send text, files, directories, or globbed file lists\n  - Receive files with auto-accept and optional PIN\n\nAll options are provided as flags; no prompts are used.",
+    after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -20,11 +26,11 @@ struct Cli {
     #[arg(long, global = true)]
     alias: Option<String>,
 
-    /// Device type reported to peers.
+    /// Device type reported to peers (mobile|desktop|web|headless|server).
     #[arg(long, global = true, default_value = "headless")]
     device_type: DeviceType,
 
-    /// Protocol to advertise for our discovery server.
+    /// Protocol to advertise for our discovery server (http|https).
     #[arg(long, global = true, default_value = "https")]
     protocol: Protocol,
 
