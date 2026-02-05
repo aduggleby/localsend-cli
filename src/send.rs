@@ -76,14 +76,6 @@ pub(crate) async fn send_prepared_items(
         .timeout(Duration::from_secs(timeout))
         .build()?;
 
-    let url = format!(
-        "{}://{}:{}{}/prepare-upload",
-        target.info.protocol,
-        target.addr,
-        target.info.port,
-        API_BASE
-    );
-
     let mut files = HashMap::new();
     for item in &items {
         files.insert(
@@ -105,77 +97,118 @@ pub(crate) async fn send_prepared_items(
         files,
     };
 
-    let mut request = client.post(url).json(&prepare_request);
-    if let Some(pin) = pin.as_ref() {
-        request = request.query(&["pin", pin]);
+    let mut protocols = vec![target.info.protocol.clone()];
+    if target.info.protocol != "https" {
+        protocols.push("https".to_string());
+    }
+    if target.info.protocol != "http" {
+        protocols.push("http".to_string());
     }
 
-    let response = request.send().await?;
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err(anyhow!("receiver rejected the pin"));
-    }
-    if !response.status().is_success() {
-        return Err(anyhow!("prepare-upload failed: {}", response.status()));
-    }
-
-    let prepared: PrepareUploadResponse = response.json().await?;
-    let token_map: HashMap<String, String> = prepared.files;
-
-    let mut results = Vec::new();
-
-    for item in items {
-        let token = token_map
-            .get(&item.id)
-            .ok_or_else(|| anyhow!("missing token for {}", item.file_name))?;
-        let upload_url = format!(
-            "{}://{}:{}{}/upload",
-            target.info.protocol,
+    let mut last_error: Option<anyhow::Error> = None;
+    for proto in protocols {
+        let url = format!(
+            "{}://{}:{}{}/prepare-upload",
+            proto,
             target.addr,
             target.info.port,
             API_BASE
         );
 
-        let mut upload_req = client.post(upload_url);
-        upload_req = upload_req.query(&[
-            ("sessionId", prepared.session_id.as_str()),
-            ("fileId", item.id.as_str()),
-            ("token", token.as_str()),
-        ]);
+        let mut request = client.post(url).json(&prepare_request);
+        if let Some(pin) = pin.as_ref() {
+            request = request.query(&["pin", pin]);
+        }
 
-        let body = match &item.data {
-            SendData::Path(path) => {
-                let file = tokio::fs::File::open(path).await?;
-                let stream = ReaderStream::new(file);
-                reqwest::Body::wrap_stream(stream)
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(err) => {
+                last_error = Some(err.into());
+                continue;
             }
-            SendData::Bytes(bytes) => reqwest::Body::from(bytes.clone()),
         };
-
-        let response = upload_req.body(body).send().await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(anyhow!("receiver rejected the pin"));
+        }
+        if response.status() == StatusCode::NO_CONTENT {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&items.len())?);
+            } else {
+                println!("Sent message");
+            }
+            return Ok(());
+        }
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "upload failed for {}: {}",
-                item.file_name,
-                response.status()
-            ));
+            return Err(anyhow!("prepare-upload failed: {}", response.status()));
         }
 
-        results.push(SendResult {
-            id: item.id,
-            name: item.file_name,
-            size: item.size,
-        });
-    }
+        let prepared: PrepareUploadResponse = match response.json().await {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                last_error = Some(err.into());
+                continue;
+            }
+        };
+        let token_map: HashMap<String, String> = prepared.files;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
-    } else {
-        for result in results {
-            println!("Sent {} ({} bytes)", result.name, result.size);
+        let mut results = Vec::new();
+
+        for item in items {
+            let token = token_map
+                .get(&item.id)
+                .ok_or_else(|| anyhow!("missing token for {}", item.file_name))?;
+            let upload_url = format!(
+                "{}://{}:{}{}/upload",
+                proto,
+                target.addr,
+                target.info.port,
+                API_BASE
+            );
+
+            let mut upload_req = client.post(upload_url);
+            upload_req = upload_req.query(&[
+                ("sessionId", prepared.session_id.as_str()),
+                ("fileId", item.id.as_str()),
+                ("token", token.as_str()),
+            ]);
+
+            let body = match &item.data {
+                SendData::Path(path) => {
+                    let file = tokio::fs::File::open(path).await?;
+                    let stream = ReaderStream::new(file);
+                    reqwest::Body::wrap_stream(stream)
+                }
+                SendData::Bytes(bytes) => reqwest::Body::from(bytes.clone()),
+            };
+
+            let response = upload_req.body(body).send().await?;
+            if !response.status().is_success() {
+                return Err(anyhow!(
+                    "upload failed for {}: {}",
+                    item.file_name,
+                    response.status()
+                ));
+            }
+
+            results.push(SendResult {
+                id: item.id,
+                name: item.file_name,
+                size: item.size,
+            });
         }
+
+        if json {
+            println!("{}", serde_json::to_string_pretty(&results)?);
+        } else {
+            for result in results {
+                println!("Sent {} ({} bytes)", result.name, result.size);
+            }
+        }
+
+        return Ok(());
     }
 
-    Ok(())
+    Err(last_error.unwrap_or_else(|| anyhow!("prepare-upload failed")))
 }
 
 #[derive(Debug)]
@@ -198,11 +231,17 @@ pub(crate) async fn resolve_target(
     timeout: u64,
 ) -> anyhow::Result<DiscoveredDevice> {
     if let Some(direct) = selector.direct.as_deref() {
-        if let Some((ip, port)) = util::parse_socket_target(direct) {
+        if let Some((ip, direct_port)) = util::parse_socket_target(direct) {
+            if let Ok(Some(info)) =
+                crate::discovery::probe_device(ip, direct_port, &device_info, timeout).await
+            {
+                let id = crate::discovery::device_id(&info, ip);
+                return Ok(DiscoveredDevice { id, info, addr: ip });
+            }
             return Ok(DiscoveredDevice {
-                id: format!("{}:{}", ip, port),
+                id: format!("{}:{}", ip, direct_port),
                 info: DeviceInfo {
-                    port,
+                    port: direct_port,
                     protocol: device_info.protocol.clone(),
                     ..device_info
                 },
@@ -212,6 +251,11 @@ pub(crate) async fn resolve_target(
     }
 
     if let Ok(ip) = selector.to.parse::<IpAddr>() {
+        if let Ok(Some(info)) = crate::discovery::probe_device(ip, port, &device_info, timeout).await
+        {
+            let id = crate::discovery::device_id(&info, ip);
+            return Ok(DiscoveredDevice { id, info, addr: ip });
+        }
         return Ok(DiscoveredDevice {
             id: ip.to_string(),
             info: DeviceInfo {

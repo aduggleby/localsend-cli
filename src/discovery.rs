@@ -130,7 +130,7 @@ pub async fn search_tailscale_peer(
             if !matches!(ip, IpAddr::V4(_)) {
                 continue;
             }
-            let probe = probe_peer(client.clone(), device_info, ip);
+            let probe = probe_peer(client.clone(), device_info, ip, device_info.port);
             let result = tokio::time::timeout(remaining, probe).await;
             if let Ok(Some(device)) = result {
                 let id = device_id(&device, ip);
@@ -144,6 +144,22 @@ pub async fn search_tailscale_peer(
     }
 
     Ok(None)
+}
+
+pub async fn probe_device(
+    ip: IpAddr,
+    port: u16,
+    device_info: &DeviceInfo,
+    timeout_secs: u64,
+) -> anyhow::Result<Option<DeviceInfo>> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()?;
+
+    let probe = probe_peer(client, device_info, ip, port);
+    let result = tokio::time::timeout(Duration::from_secs(timeout_secs), probe).await;
+    Ok(result.ok().flatten())
 }
 
 #[derive(Clone)]
@@ -368,7 +384,7 @@ async fn scan_subnets(
     Ok(())
 }
 
-fn device_id(info: &DeviceInfo, addr: IpAddr) -> String {
+pub(crate) fn device_id(info: &DeviceInfo, addr: IpAddr) -> String {
     if !info.fingerprint.is_empty() {
         return info.fingerprint.clone();
     }
@@ -418,7 +434,7 @@ async fn scan_tailscale_peers(
             if !matches!(ip, IpAddr::V4(_)) {
                 continue;
             }
-            let probe = probe_peer(client.clone(), &device_info, ip);
+            let probe = probe_peer(client.clone(), &device_info, ip, device_info.port);
             let result = tokio::time::timeout(remaining, probe).await;
             if let Ok(Some(device)) = result {
                 let id = device_id(&device, ip);
@@ -464,6 +480,7 @@ async fn probe_peer(
     client: reqwest::Client,
     device_info: &DeviceInfo,
     ip: IpAddr,
+    port: u16,
 ) -> Option<DeviceInfo> {
     let mut protocols = vec![device_info.protocol.clone()];
     if device_info.protocol != "https" {
@@ -476,24 +493,24 @@ async fn probe_peer(
     for proto in protocols {
         let info_url = format!(
             "{}://{}:{}/api/localsend/v2/info",
-            proto, ip, device_info.port
+            proto, ip, port
         );
         if let Ok(response) = client.get(info_url).send().await {
             if response.status().is_success() {
                 if let Ok(peer) = response.json::<PeerInfo>().await {
-                    return Some(peer.into_device_info(device_info.port, &proto));
+                    return Some(peer.into_device_info(port, &proto));
                 }
             }
         }
 
         let register_url = format!(
             "{}://{}:{}/api/localsend/v2/register",
-            proto, ip, device_info.port
+            proto, ip, port
         );
         if let Ok(response) = client.post(register_url).json(device_info).send().await {
             if response.status().is_success() {
                 if let Ok(peer) = response.json::<PeerInfo>().await {
-                    return Some(peer.into_device_info(device_info.port, &proto));
+                    return Some(peer.into_device_info(port, &proto));
                 }
             }
         }
