@@ -5,7 +5,7 @@ mod send;
 mod util;
 mod webshare;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use discovery::{DiscoveryOptions, TargetSelector};
 use protocol::{DeviceInfo, DeviceType, Protocol};
 use std::net::IpAddr;
@@ -109,7 +109,7 @@ enum Commands {
         pin: Option<String>,
 
         /// Send a multicast announcement on startup.
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
         announce: bool,
 
         /// Stop after receiving this many files.

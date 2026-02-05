@@ -80,9 +80,8 @@ pub async fn run_receiver(
 
     if announce {
         announce_multicast(device_info.clone()).await?;
+        tokio::spawn(respond_to_announces(device_info.clone()));
     }
-
-    tokio::spawn(respond_to_announces(device_info.clone()));
 
     let app = Router::new()
         .route(&format!("{API_BASE}/register"), post(register))
