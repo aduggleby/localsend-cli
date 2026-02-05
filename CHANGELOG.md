@@ -5,6 +5,16 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-02-05
+### Added
+- Release workflow now runs `cargo test` before packaging artifacts.
+
+### Changed
+- Expanded integration tests to cover more CLI branches and options.
+
+### Fixed
+- Multicast sockets are set non-blocking to avoid tokio blocking-socket panics.
+
 ## [0.9.0] - 2026-02-05
 ### Added
 - Full CLI surface: `list`, `search`, `send`, `receive`, `webshare` with standard help output.
