@@ -11,6 +11,7 @@ use qrcode::QrCode;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
  
@@ -81,6 +82,7 @@ pub async fn run_web_share(
             println!("PIN: {}", pin);
         }
         println!("Press Ctrl+C to stop.");
+        let _ = std::io::stdout().flush();
     }
 
     let app = Router::new()

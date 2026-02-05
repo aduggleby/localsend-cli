@@ -67,6 +67,50 @@ fn spawn_receiver(output_dir: &Path, port: u16) -> ReceiverGuard {
     ReceiverGuard { child }
 }
 
+fn spawn_receiver_with_pin(output_dir: &Path, port: u16, pin: &str) -> ReceiverGuard {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"));
+    let child = cmd
+        .arg("receive")
+        .arg("--output")
+        .arg(output_dir)
+        .arg("--bind")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--protocol")
+        .arg("https")
+        .arg("--pin")
+        .arg(pin)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    wait_for_port(port, Duration::from_secs(5));
+    ReceiverGuard { child }
+}
+
+fn spawn_webshare(text: &str, port: u16) -> ReceiverGuard {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"));
+    let child = cmd
+        .arg("webshare")
+        .arg("--text")
+        .arg(text)
+        .arg("--bind")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--protocol")
+        .arg("http")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    wait_for_port(port, Duration::from_secs(5));
+    ReceiverGuard { child }
+}
+
 fn run_send(args: &[&str]) {
     Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"))
         .args(args)
@@ -84,6 +128,27 @@ fn read_all_files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         }
     }
     entries
+}
+
+fn http_get(host_port: &str, path: &str) -> (u16, Vec<u8>) {
+    let mut stream = TcpStream::connect(host_port).unwrap();
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, host_port
+    );
+    use std::io::Write;
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut buf = Vec::new();
+    use std::io::Read;
+    stream.read_to_end(&mut buf).unwrap();
+    let response = String::from_utf8_lossy(&buf);
+    let status = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    (status, buf)
 }
 
 #[test]
@@ -208,4 +273,88 @@ fn send_directory_as_zip() {
     assert_eq!(files.len(), 1, "expected one zip file");
     let (_, content) = &files[0];
     assert!(content.starts_with(b"PK"), "expected a zip file");
+}
+
+#[test]
+#[serial]
+fn send_requires_pin_errors_without_pin() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let port = pick_port();
+    let _receiver = spawn_receiver_with_pin(temp_dir.path(), port, "1234");
+
+    Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"))
+        .arg("send")
+        .arg("--to")
+        .arg("127.0.0.1")
+        .arg("--direct")
+        .arg(format!("127.0.0.1:{port}"))
+        .arg("--text")
+        .arg("hello")
+        .arg("--timeout")
+        .arg("3")
+        .assert()
+        .failure();
+}
+
+#[test]
+#[serial]
+fn send_no_payload_errors() {
+    Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"))
+        .arg("send")
+        .arg("--to")
+        .arg("127.0.0.1")
+        .arg("--direct")
+        .arg("127.0.0.1:1")
+        .arg("--timeout")
+        .arg("1")
+        .assert()
+        .failure();
+}
+
+#[test]
+#[serial]
+fn webshare_serves_content() {
+    let port = pick_port();
+    let _webshare = spawn_webshare("webshare-test", port);
+
+    let host_port = format!("127.0.0.1:{port}");
+    let (status, body) = http_get(&host_port, "/");
+    assert_eq!(status, 200);
+    let body_str = String::from_utf8_lossy(&body);
+    let link_start = body_str.find("/files/").expect("expected file link");
+    let link = &body_str[link_start..];
+    let link_end = link.find('"').unwrap_or(link.len());
+    let path = &link[..link_end];
+
+    let (file_status, file_body) = http_get(&host_port, path);
+    assert_eq!(file_status, 200);
+    assert!(String::from_utf8_lossy(&file_body).contains("webshare-test"));
+}
+
+#[test]
+#[serial]
+fn send_qr_fallback_prints_url() {
+    let port = pick_port();
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"))
+        .arg("webshare")
+        .arg("--text")
+        .arg("hello")
+        .arg("--bind")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--protocol")
+        .arg("http")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    thread::sleep(Duration::from_secs(3));
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("QR send ready."), "expected QR banner");
+    assert!(stdout.contains("http"), "expected URL in output");
 }
