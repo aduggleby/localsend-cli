@@ -5,6 +5,16 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-02-05
+### Added
+- Tag-triggered release workflow restored while keeping manual dispatch available.
+
+### Changed
+- Receiver announce handling now respects the flag in CI tests.
+
+### Fixed
+- CI receiver startup failures on macOS by disabling announce in tests.
+
 ## [0.9.1] - 2026-02-05
 ### Added
 - Release workflow now runs `cargo test` before packaging artifacts.
