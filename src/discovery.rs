@@ -1,4 +1,4 @@
-use crate::protocol::{Announcement, DeviceInfo, API_BASE};
+use crate::protocol::{Announcement, DeviceInfo, DeviceType, API_BASE};
 use crate::util::TlsIdentity;
 use anyhow::Context;
 use axum::extract::{ConnectInfo, State};
@@ -13,6 +13,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 
 const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 167);
 const MULTICAST_PORT: u16 = 53317;
@@ -57,6 +58,94 @@ pub fn match_selector(selector: &str, device: &DiscoveredDevice) -> bool {
     false
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerInfo {
+    alias: String,
+    version: String,
+    device_model: String,
+    device_type: DeviceType,
+    fingerprint: String,
+    port: Option<u16>,
+    protocol: Option<String>,
+    download: Option<bool>,
+}
+
+impl PeerInfo {
+    fn into_device_info(self, fallback_port: u16, fallback_protocol: &str) -> DeviceInfo {
+        DeviceInfo {
+            alias: self.alias,
+            version: self.version,
+            device_model: self.device_model,
+            device_type: self.device_type,
+            fingerprint: self.fingerprint,
+            port: self.port.unwrap_or(fallback_port),
+            protocol: self
+                .protocol
+                .unwrap_or_else(|| fallback_protocol.to_string()),
+            download: self.download.unwrap_or(false),
+        }
+    }
+}
+
+pub async fn search_tailscale_peer(
+    selector: &str,
+    device_info: &DeviceInfo,
+    timeout_secs: u64,
+) -> anyhow::Result<Option<DiscoveredDevice>> {
+    let output = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output();
+    let Ok(output) = output else { return Ok(None) };
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return Ok(None);
+    };
+    let Some(peers) = json.get("Peer") else { return Ok(None) };
+    let Some(peer_map) = peers.as_object() else { return Ok(None) };
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_millis(800))
+        .build()?;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    for peer in peer_map.values() {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        if !tailscale_peer_matches(peer, selector) {
+            continue;
+        }
+        let Some(ips) = peer.get("TailscaleIPs").and_then(|v| v.as_array()) else { continue };
+        for ip_val in ips {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let Some(ip_str) = ip_val.as_str() else { continue };
+            let Ok(ip) = ip_str.parse::<IpAddr>() else { continue };
+            if !matches!(ip, IpAddr::V4(_)) {
+                continue;
+            }
+            let probe = probe_peer(client.clone(), device_info, ip);
+            let result = tokio::time::timeout(remaining, probe).await;
+            if let Ok(Some(device)) = result {
+                let id = device_id(&device, ip);
+                return Ok(Some(DiscoveredDevice {
+                    id,
+                    info: device,
+                    addr: ip,
+                }));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 #[derive(Clone)]
 struct DiscoveryState {
     device_info: DeviceInfo,
@@ -81,7 +170,7 @@ pub async fn discover_devices(
     let listener = listen_multicast(device_info.clone(), devices.clone(), options.timeout_secs);
 
     if options.scan {
-        let scan = scan_subnets(device_info.clone(), devices.clone());
+        let scan = scan_subnets(device_info.clone(), devices.clone(), options.timeout_secs);
         let _ = tokio::join!(announcer, listener, scan);
     } else {
         let _ = tokio::join!(announcer, listener);
@@ -213,6 +302,7 @@ async fn listen_multicast(
 async fn scan_subnets(
     device_info: DeviceInfo,
     devices: Arc<Mutex<HashMap<String, DiscoveredDevice>>>,
+    timeout_secs: u64,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -220,7 +310,8 @@ async fn scan_subnets(
         .build()?
         .clone();
 
-    let mut handles = Vec::new();
+    let mut futures = FuturesUnordered::new();
+    let start = tokio::time::Instant::now();
     for iface in if_addrs::get_if_addrs().unwrap_or_default() {
         let (ip, netmask) = match iface.addr {
             if_addrs::IfAddr::V4(v4) => (v4.ip, v4.netmask),
@@ -228,6 +319,9 @@ async fn scan_subnets(
         };
         let Some(net) = ipnet::Ipv4Net::with_netmask(ip, netmask).ok() else { continue };
         for host in net.hosts() {
+            if start.elapsed() >= Duration::from_secs(timeout_secs) {
+                break;
+            }
             if host == ip {
                 continue;
             }
@@ -235,8 +329,11 @@ async fn scan_subnets(
             let devices = devices.clone();
             let info = device_info.clone();
             let client = client.clone();
-            handles.push(tokio::spawn(async move {
-                let url = format!("{}://{}:{}/api/localsend/v2/register", info.protocol, host, info.port);
+            futures.push(async move {
+                let url = format!(
+                    "{}://{}:{}/api/localsend/v2/register",
+                    info.protocol, host, info.port
+                );
                 let response = client.post(url).json(&info).send().await.ok()?;
                 let device: DeviceInfo = response.json().await.ok()?;
                 let id = device_id(&device, target.ip());
@@ -250,15 +347,23 @@ async fn scan_subnets(
                     },
                 );
                 Some(())
-            }));
+            });
         }
     }
 
-    for handle in handles {
-        let _ = handle.await;
+    let deadline = start + Duration::from_secs(timeout_secs);
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let next = tokio::time::timeout(remaining, futures.next()).await;
+        if next.is_err() {
+            break;
+        }
+        if next.ok().flatten().is_none() {
+            break;
+        }
     }
 
-    scan_tailscale_peers(device_info.clone(), devices.clone()).await?;
+    scan_tailscale_peers(device_info.clone(), devices.clone(), timeout_secs).await?;
 
     Ok(())
 }
@@ -277,6 +382,7 @@ fn device_id(info: &DeviceInfo, addr: IpAddr) -> String {
 async fn scan_tailscale_peers(
     device_info: DeviceInfo,
     devices: Arc<Mutex<HashMap<String, DiscoveredDevice>>>,
+    timeout_secs: u64,
 ) -> anyhow::Result<()> {
     let output = Command::new("tailscale")
         .args(["status", "--json"])
@@ -296,69 +402,102 @@ async fn scan_tailscale_peers(
         .timeout(Duration::from_millis(800))
         .build()?;
 
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
     for peer in peer_map.values() {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
         let Some(ips) = peer.get("TailscaleIPs").and_then(|v| v.as_array()) else { continue };
         for ip_val in ips {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
             let Some(ip_str) = ip_val.as_str() else { continue };
             let Ok(ip) = ip_str.parse::<IpAddr>() else { continue };
             if !matches!(ip, IpAddr::V4(_)) {
                 continue;
             }
-            let mut protocols = vec![device_info.protocol.clone()];
-            if device_info.protocol != "https" {
-                protocols.push("https".to_string());
-            }
-            if device_info.protocol != "http" {
-                protocols.push("http".to_string());
-            }
-
-            for proto in protocols {
-                let info_url = format!(
-                    "{}://{}:{}/api/localsend/v2/info",
-                    proto, ip, device_info.port
+            let probe = probe_peer(client.clone(), &device_info, ip);
+            let result = tokio::time::timeout(remaining, probe).await;
+            if let Ok(Some(device)) = result {
+                let id = device_id(&device, ip);
+                let mut devices_lock = devices.lock().expect("devices lock");
+                devices_lock.insert(
+                    id.clone(),
+                    DiscoveredDevice {
+                        id,
+                        info: device,
+                        addr: ip,
+                    },
                 );
-                if let Ok(response) = client.get(info_url).send().await {
-                    if response.status().is_success() {
-                        if let Ok(device) = response.json::<DeviceInfo>().await {
-                            let id = device_id(&device, ip);
-                            let mut devices_lock = devices.lock().expect("devices lock");
-                            devices_lock.insert(
-                                id.clone(),
-                                DiscoveredDevice {
-                                    id,
-                                    info: device,
-                                    addr: ip,
-                                },
-                            );
-                            break;
-                        }
-                    }
-                }
-
-                let register_url = format!(
-                    "{}://{}:{}/api/localsend/v2/register",
-                    proto, ip, device_info.port
-                );
-                if let Ok(response) = client.post(register_url).json(&device_info).send().await {
-                    if response.status().is_success() {
-                        if let Ok(device) = response.json::<DeviceInfo>().await {
-                            let id = device_id(&device, ip);
-                            let mut devices_lock = devices.lock().expect("devices lock");
-                            devices_lock.insert(
-                                id.clone(),
-                                DiscoveredDevice {
-                                    id,
-                                    info: device,
-                                    addr: ip,
-                                },
-                            );
-                            break;
-                        }
-                    }
-                }
             }
         }
     }
 
     Ok(())
+}
+
+fn tailscale_peer_matches(peer: &serde_json::Value, selector: &str) -> bool {
+    let needle = selector.to_lowercase();
+    let mut candidates = Vec::new();
+    if let Some(name) = peer.get("Name").and_then(|v| v.as_str()) {
+        candidates.push(name.to_string());
+    }
+    if let Some(name) = peer.get("HostName").and_then(|v| v.as_str()) {
+        candidates.push(name.to_string());
+    }
+    if let Some(name) = peer.get("DNSName").and_then(|v| v.as_str()) {
+        let trimmed = name.trim_end_matches('.');
+        candidates.push(trimmed.to_string());
+        if let Some(short) = trimmed.split('.').next() {
+            candidates.push(short.to_string());
+        }
+    }
+
+    candidates
+        .into_iter()
+        .any(|candidate| candidate.to_lowercase() == needle)
+}
+
+async fn probe_peer(
+    client: reqwest::Client,
+    device_info: &DeviceInfo,
+    ip: IpAddr,
+) -> Option<DeviceInfo> {
+    let mut protocols = vec![device_info.protocol.clone()];
+    if device_info.protocol != "https" {
+        protocols.push("https".to_string());
+    }
+    if device_info.protocol != "http" {
+        protocols.push("http".to_string());
+    }
+
+    for proto in protocols {
+        let info_url = format!(
+            "{}://{}:{}/api/localsend/v2/info",
+            proto, ip, device_info.port
+        );
+        if let Ok(response) = client.get(info_url).send().await {
+            if response.status().is_success() {
+                if let Ok(peer) = response.json::<PeerInfo>().await {
+                    return Some(peer.into_device_info(device_info.port, &proto));
+                }
+            }
+        }
+
+        let register_url = format!(
+            "{}://{}:{}/api/localsend/v2/register",
+            proto, ip, device_info.port
+        );
+        if let Ok(response) = client.post(register_url).json(device_info).send().await {
+            if response.status().is_success() {
+                if let Ok(peer) = response.json::<PeerInfo>().await {
+                    return Some(peer.into_device_info(device_info.port, &proto));
+                }
+            }
+        }
+    }
+
+    None
 }

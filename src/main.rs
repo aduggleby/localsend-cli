@@ -121,6 +121,12 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::CryptoProvider::install_default(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        );
+    }
+
     let cli = Cli::parse();
     let alias = cli
         .alias
@@ -213,6 +219,13 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .find(|device| discovery::match_selector(&selector.to, device))
                 .cloned()
+            {
+                util::print_device(&found, cli.json);
+                return Ok(());
+            }
+
+            if let Some(found) =
+                discovery::search_tailscale_peer(&selector.to, &device_info, timeout).await?
             {
                 util::print_device(&found, cli.json);
                 return Ok(());
