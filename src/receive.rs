@@ -301,6 +301,7 @@ async fn respond_to_announces(device_info: DeviceInfo) -> anyhow::Result<()> {
     socket.set_multicast_loop_v4(true)?;
     socket.bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53317).into())?;
     socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 167), &Ipv4Addr::UNSPECIFIED)?;
+    socket.set_nonblocking(true)?;
 
     let socket = tokio::net::UdpSocket::from_std(socket.into())?;
     let mut buf = vec![0u8; 65536];

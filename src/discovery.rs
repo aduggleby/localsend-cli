@@ -282,6 +282,7 @@ async fn listen_multicast(
     socket.set_multicast_loop_v4(true)?;
     socket.bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), MULTICAST_PORT).into())?;
     socket.join_multicast_v4(&MULTICAST_ADDR, &Ipv4Addr::UNSPECIFIED)?;
+    socket.set_nonblocking(true)?;
 
     let socket = tokio::net::UdpSocket::from_std(socket.into())?;
     let mut buf = vec![0u8; 65536];
