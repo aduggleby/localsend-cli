@@ -15,7 +15,6 @@ use std::time::SystemTime;
 pub struct TlsIdentity {
     pub cert_pem: String,
     pub key_pem: String,
-    pub fingerprint: String,
 }
 
 #[derive(Clone)]
@@ -37,7 +36,7 @@ pub fn build_identity(protocol: Protocol) -> anyhow::Result<Identity> {
             let key_pem = cert.key_pair.serialize_pem();
             Ok(Identity {
                 fingerprint: fingerprint.clone(),
-                tls: Some(TlsIdentity { cert_pem, key_pem, fingerprint }),
+                tls: Some(TlsIdentity { cert_pem, key_pem }),
             })
         }
         Protocol::Http => {

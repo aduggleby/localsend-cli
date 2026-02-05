@@ -130,12 +130,6 @@ pub struct PreparedFile {
     pub token: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct PreparedUpload {
-    pub session_id: String,
-    pub files: Vec<PreparedFile>,
-}
-
 pub fn new_session_id() -> String {
     Uuid::new_v4().to_string()
 }
