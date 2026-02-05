@@ -1,4 +1,4 @@
-use crate::discovery::{self, DiscoveryOptions, DiscoveredDevice, TargetSelector};
+use crate::discovery::{self, match_selector, DiscoveryOptions, DiscoveredDevice, TargetSelector};
 use crate::protocol::{new_file_id, DeviceInfo, FileInfo, FileMetadata, PrepareUploadRequest, PrepareUploadResponse, API_BASE};
 use crate::util::{self, TlsIdentity};
 use anyhow::{anyhow, Context};
@@ -216,20 +216,6 @@ async fn resolve_target(
         .ok_or_else(|| anyhow!("no matching device found"))?;
 
     Ok(target)
-}
-
-fn match_selector(selector: &str, device: &DiscoveredDevice) -> bool {
-    let needle = selector.to_lowercase();
-    if device.id.to_lowercase() == needle {
-        return true;
-    }
-    if device.info.alias.to_lowercase() == needle {
-        return true;
-    }
-    if device.addr.to_string() == selector {
-        return true;
-    }
-    false
 }
 
 async fn build_items(

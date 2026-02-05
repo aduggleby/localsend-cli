@@ -16,7 +16,7 @@ use std::path::PathBuf;
     version,
     about = "Headless LocalSend CLI",
     long_about = "A fully non-interactive LocalSend CLI for automation and LLM control.\n\nCapabilities:\n  - Discover devices on the local network\n  - Send text, files, directories, or globbed file lists\n  - Receive files with auto-accept and optional PIN\n\nAll options are provided as flags; no prompts are used.",
-    after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
+    after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli search --to \"alex-thinkpad-2024\"\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -107,6 +107,16 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         announce: bool,
     },
+    /// Search for a single device (multicast first, then scan). Preferred on multi-network setups.
+    Search {
+        /// Device selector: id, alias, hostname, or IP address.
+        #[arg(long)]
+        to: String,
+
+        /// Timeout in seconds for discovery and scan.
+        #[arg(long, default_value_t = 5)]
+        timeout: u64,
+    },
 }
 
 #[tokio::main]
@@ -184,6 +194,51 @@ async fn main() -> anyhow::Result<()> {
                 cli.json,
             )
             .await?;
+        }
+        Commands::Search { to, timeout } => {
+            let selector = TargetSelector::new(to, None);
+            let options = DiscoveryOptions {
+                timeout_secs: timeout,
+                scan: false,
+            };
+            let mut devices = discovery::discover_devices(
+                device_info.clone(),
+                identity.tls.clone(),
+                cli.bind,
+                cli.port,
+                options,
+            )
+            .await?;
+            if let Some(found) = devices
+                .iter()
+                .find(|device| discovery::match_selector(&selector.to, device))
+                .cloned()
+            {
+                util::print_device(&found, cli.json);
+                return Ok(());
+            }
+
+            let options = DiscoveryOptions {
+                timeout_secs: timeout,
+                scan: true,
+            };
+            devices = discovery::discover_devices(
+                device_info,
+                identity.tls.clone(),
+                cli.bind,
+                cli.port,
+                options,
+            )
+            .await?;
+            if let Some(found) = devices
+                .iter()
+                .find(|device| discovery::match_selector(&selector.to, device))
+                .cloned()
+            {
+                util::print_device(&found, cli.json);
+                return Ok(());
+            }
+            anyhow::bail!("no matching device found");
         }
     }
 

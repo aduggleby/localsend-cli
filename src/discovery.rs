@@ -43,6 +43,20 @@ impl TargetSelector {
     }
 }
 
+pub fn match_selector(selector: &str, device: &DiscoveredDevice) -> bool {
+    let needle = selector.to_lowercase();
+    if device.id.to_lowercase() == needle {
+        return true;
+    }
+    if device.info.alias.to_lowercase() == needle {
+        return true;
+    }
+    if device.addr.to_string() == selector {
+        return true;
+    }
+    false
+}
+
 #[derive(Clone)]
 struct DiscoveryState {
     device_info: DeviceInfo,

@@ -114,6 +114,24 @@ pub fn print_devices(devices: &[DiscoveredDevice], json: bool) {
     }
 }
 
+pub fn print_device(device: &DiscoveredDevice, json: bool) {
+    if json {
+        let _ = serde_json::to_writer_pretty(io::stdout(), device);
+        let _ = io::stdout().flush();
+        return;
+    }
+
+    println!(
+        "{} ({}) {}:{} [{}] id={}",
+        device.info.alias,
+        device.info.device_model,
+        device.addr,
+        device.info.port,
+        device.info.protocol,
+        device.id
+    );
+}
+
 pub fn parse_socket_target(target: &str) -> Option<(IpAddr, u16)> {
     let mut parts = target.split(':');
     let host = parts.next()?;
