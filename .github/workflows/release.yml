@@ -28,8 +28,16 @@ jobs:
           else
             BIN_PATH="target/release/${BIN_NAME}"
           fi
-          ARCH=$(rustc -vV | awk '/host/ {print $2}')
-          TAR_NAME="${BIN_NAME}-${{ matrix.os }}-${ARCH}.tar.gz"
+          case "${{ matrix.os }}" in
+            ubuntu-latest) OS_NAME="linux" ;;
+            macos-latest) OS_NAME="macos" ;;
+            windows-latest) OS_NAME="windows" ;;
+            *) OS_NAME="${{ matrix.os }}" ;;
+          esac
+
+          ARCH_RAW=$(rustc -vV | awk '/host/ {print $2}')
+          ARCH="${ARCH_RAW%%-*}"
+          TAR_NAME="${BIN_NAME}-${OS_NAME}-${ARCH}.tar.gz"
           tar -czf "$OUT_DIR/$TAR_NAME" -C "$(dirname "$BIN_PATH")" "$(basename "$BIN_PATH")"
       - uses: actions/upload-artifact@v4
         with:
