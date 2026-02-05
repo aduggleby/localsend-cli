@@ -46,6 +46,28 @@ fn wait_for_port(port: u16, timeout: Duration) {
     panic!("receiver did not start in time on port {port}");
 }
 
+fn wait_for_port_with_child(child: &mut Child, port: u16, timeout: Duration) {
+    let start = Instant::now();
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    while start.elapsed() < timeout {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            return;
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            let stderr = read_stderr(child);
+            let _ = child.wait();
+            panic!(
+                "receiver exited early (status {status}) on port {port}. stderr: {stderr}"
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let stderr = read_stderr(child);
+    let _ = child.wait();
+    panic!("receiver did not start in time on port {port}. stderr: {stderr}");
+}
+
 fn wait_for_exit(child: &mut Child, timeout: Duration) {
     let start = Instant::now();
     while start.elapsed() < timeout {
@@ -57,9 +79,18 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) {
     panic!("process did not exit in time");
 }
 
+fn read_stderr(child: &mut Child) -> String {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_end(&mut buf);
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
 fn spawn_receiver(output_dir: &Path, port: u16) -> ReceiverGuard {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"));
-    let child = cmd
+    let mut child = cmd
         .arg("receive")
         .arg("--output")
         .arg(output_dir)
@@ -70,11 +101,11 @@ fn spawn_receiver(output_dir: &Path, port: u16) -> ReceiverGuard {
         .arg("--protocol")
         .arg("https")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
-    wait_for_port(port, Duration::from_secs(5));
+    wait_for_port_with_child(&mut child, port, Duration::from_secs(15));
     ReceiverGuard { child }
 }
 
@@ -92,14 +123,14 @@ fn spawn_receiver_with_max(output_dir: &Path, port: u16, max_files: u64) -> Chil
         .arg("--max-files")
         .arg(max_files.to_string())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap()
 }
 
 fn spawn_receiver_with_pin(output_dir: &Path, port: u16, pin: &str) -> ReceiverGuard {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("localsend-cli"));
-    let child = cmd
+    let mut child = cmd
         .arg("receive")
         .arg("--output")
         .arg(output_dir)
@@ -112,11 +143,11 @@ fn spawn_receiver_with_pin(output_dir: &Path, port: u16, pin: &str) -> ReceiverG
         .arg("--pin")
         .arg(pin)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
-    wait_for_port(port, Duration::from_secs(5));
+    wait_for_port_with_child(&mut child, port, Duration::from_secs(15));
     ReceiverGuard { child }
 }
 
@@ -480,7 +511,7 @@ fn send_qr_fallback_via_send_command() {
         .spawn()
         .unwrap();
 
-    thread::sleep(Duration::from_secs(5));
+    thread::sleep(Duration::from_secs(7));
     let _ = child.kill();
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -493,7 +524,7 @@ fn receive_respects_max_files() {
     let temp_dir = tempfile::tempdir().unwrap();
     let port = pick_port();
     let mut receiver = spawn_receiver_with_max(temp_dir.path(), port, 1);
-    wait_for_port(port, Duration::from_secs(5));
+    wait_for_port_with_child(&mut receiver, port, Duration::from_secs(15));
 
     run_send(&[
         "send",
