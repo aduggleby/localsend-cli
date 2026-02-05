@@ -314,11 +314,12 @@ async fn zip_directory(dir: &Path, temp_files: &mut Vec<NamedTempFile>) -> anyho
 
     let temp = NamedTempFile::new()?;
     let path = temp.path().to_path_buf();
+    let path_for_zip = path.clone();
 
     let dir_clone = dir.clone();
     let name = name.to_string();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let file = std::fs::File::create(&path)?;
+        let file = std::fs::File::create(&path_for_zip)?;
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 

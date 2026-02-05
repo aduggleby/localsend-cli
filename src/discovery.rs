@@ -207,12 +207,8 @@ async fn scan_subnets(
 
     let mut handles = Vec::new();
     for iface in if_addrs::get_if_addrs().unwrap_or_default() {
-        let ip = match iface.ip() {
-            IpAddr::V4(ip) => ip,
-            _ => continue,
-        };
-        let netmask = match iface.netmask() {
-            IpAddr::V4(mask) => mask,
+        let (ip, netmask) = match iface.addr {
+            if_addrs::IfAddr::V4(v4) => (v4.ip, v4.netmask),
             _ => continue,
         };
         let Some(net) = ipnet::Ipv4Net::with_netmask(ip, netmask).ok() else { continue };

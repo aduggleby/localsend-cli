@@ -7,6 +7,7 @@ use rcgen::generate_simple_self_signed;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::io::{self, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -28,12 +29,12 @@ pub fn build_identity(protocol: Protocol) -> anyhow::Result<Identity> {
         Protocol::Https => {
             let cert = generate_simple_self_signed(vec!["localsend-cli".to_string()])
                 .context("failed to generate self-signed cert")?;
-            let der = cert.serialize_der().context("failed to serialize cert")?;
+            let der = cert.cert.der();
             let mut hasher = Sha256::new();
-            hasher.update(&der);
+            hasher.update(der.as_ref());
             let fingerprint = hex::encode(hasher.finalize());
-            let cert_pem = cert.serialize_pem().context("failed to serialize cert pem")?;
-            let key_pem = cert.serialize_private_key_pem();
+            let cert_pem = cert.cert.pem();
+            let key_pem = cert.key_pair.serialize_pem();
             Ok(Identity {
                 fingerprint: fingerprint.clone(),
                 tls: Some(TlsIdentity { cert_pem, key_pem, fingerprint }),
