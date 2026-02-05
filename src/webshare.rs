@@ -121,8 +121,14 @@ async fn index(State(state): State<Arc<WebShareState>>) -> impl IntoResponse {
     let mut entries: Vec<_> = state.items.values().collect();
     entries.sort_by(|a, b| a.file_name.cmp(&b.file_name));
 
+    let pin_query = state
+        .pin
+        .as_ref()
+        .map(|pin| format!("?pin={}", urlencoding::encode(pin)))
+        .unwrap_or_default();
+
     for item in entries {
-        let link = format!("/files/{}", item.id);
+        let link = format!("/files/{}{}", item.id, pin_query);
         rows.push_str(&format!(
             "<li><a href=\"{}\">{} ({})</a></li>",
             link,
