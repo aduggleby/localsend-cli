@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -113,21 +114,14 @@ pub struct FileInfo {
 #[serde(rename_all = "camelCase")]
 pub struct PrepareUploadRequest {
     pub info: DeviceInfo,
-    pub files: Vec<FileInfo>,
+    pub files: HashMap<String, FileInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareUploadResponse {
     pub session_id: String,
-    pub files: Vec<PreparedFile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreparedFile {
-    pub id: String,
-    pub token: String,
+    pub files: HashMap<String, String>,
 }
 
 pub fn new_session_id() -> String {

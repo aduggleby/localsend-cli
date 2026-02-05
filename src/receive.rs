@@ -1,4 +1,4 @@
-use crate::protocol::{new_session_id, new_token, DeviceInfo, FileMetadata, PrepareUploadRequest, PrepareUploadResponse, PreparedFile, API_BASE};
+use crate::protocol::{new_session_id, new_token, DeviceInfo, FileMetadata, PrepareUploadRequest, PrepareUploadResponse, API_BASE};
 use crate::util::{self, TlsIdentity};
 use anyhow::Context;
 use axum::body::Body;
@@ -145,21 +145,18 @@ async fn prepare_upload(
         files: HashMap::new(),
     };
 
-    let mut prepared = Vec::new();
-    for file in request.files {
+    let mut prepared: HashMap<String, String> = HashMap::new();
+    for (id, file) in request.files {
         let token = new_token();
         session.files.insert(
-            file.id.clone(),
+            id.clone(),
             UploadFile {
                 token: token.clone(),
                 file_name: file.file_name.clone(),
                 metadata: file.metadata.clone(),
             },
         );
-        prepared.push(PreparedFile {
-            id: file.id,
-            token,
-        });
+        prepared.insert(id, token);
     }
 
     let session_id = new_session_id();

@@ -83,11 +83,11 @@ pub(crate) async fn send_prepared_items(
         API_BASE
     );
 
-    let prepare_request = PrepareUploadRequest {
-        info: device_info,
-        files: items
-            .iter()
-            .map(|item| FileInfo {
+    let mut files = HashMap::new();
+    for item in &items {
+        files.insert(
+            item.id.clone(),
+            FileInfo {
                 id: item.id.clone(),
                 file_name: item.file_name.clone(),
                 size: item.size,
@@ -95,8 +95,13 @@ pub(crate) async fn send_prepared_items(
                 sha256: None,
                 preview: None,
                 metadata: item.metadata.clone(),
-            })
-            .collect(),
+            },
+        );
+    }
+
+    let prepare_request = PrepareUploadRequest {
+        info: device_info,
+        files,
     };
 
     let mut request = client.post(url).json(&prepare_request);
@@ -113,11 +118,7 @@ pub(crate) async fn send_prepared_items(
     }
 
     let prepared: PrepareUploadResponse = response.json().await?;
-    let token_map: HashMap<String, String> = prepared
-        .files
-        .into_iter()
-        .map(|file| (file.id, file.token))
-        .collect();
+    let token_map: HashMap<String, String> = prepared.files;
 
     let mut results = Vec::new();
 
