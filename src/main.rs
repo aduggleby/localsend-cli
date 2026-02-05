@@ -3,6 +3,7 @@ mod protocol;
 mod receive;
 mod send;
 mod util;
+mod webshare;
 
 use clap::{Parser, Subcommand};
 use discovery::{DiscoveryOptions, TargetSelector};
@@ -16,7 +17,7 @@ use std::path::PathBuf;
     version,
     about = "Headless LocalSend CLI",
     long_about = "A fully non-interactive LocalSend CLI for automation and LLM control.\n\nCapabilities:\n  - Discover devices on the local network\n  - Send text, files, directories, or globbed file lists\n  - Receive files with auto-accept and optional PIN\n\nAll options are provided as flags; no prompts are used.",
-    after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli search --to \"alex-thinkpad-2024\"\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
+    after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli search --to \"alex-thinkpad-2024\"\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli send --to \"Alice\" --file ./photo.jpg --qr\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -92,6 +93,10 @@ enum Commands {
         /// Skip discovery and send directly to this host:port (e.g. 192.168.1.10:53317).
         #[arg(long)]
         direct: Option<String>,
+
+        /// If no matching device is found, start a QR web share fallback.
+        #[arg(long, default_value_t = false)]
+        qr: bool,
     },
     /// Receive files (auto-accept) and save to a directory.
     Receive {
@@ -166,23 +171,46 @@ async fn main() -> anyhow::Result<()> {
             glob,
             timeout,
             direct,
+            qr,
         } => {
             let selector = TargetSelector::new(to, direct);
-            send::send_items(
+            let mut temp_files = Vec::new();
+            let items = send::build_items(text, file, dir, glob, &mut temp_files).await?;
+            match send::resolve_target(
                 selector,
-                device_info,
+                device_info.clone(),
                 identity.tls.clone(),
                 cli.bind,
                 cli.port,
                 timeout,
-                pin,
-                text,
-                file,
-                dir,
-                glob,
-                cli.json,
             )
-            .await?;
+            .await
+            {
+                Ok(target) => {
+                    send::send_prepared_items(
+                        target,
+                        items,
+                        device_info,
+                        timeout,
+                        pin,
+                        cli.json,
+                    )
+                    .await?;
+                }
+                Err(err) if qr && err.downcast_ref::<send::NoMatchingDevice>().is_some() => {
+                    webshare::run_web_share(
+                        items,
+                        device_info,
+                        identity.tls.clone(),
+                        cli.bind,
+                        cli.port,
+                        pin,
+                        cli.json,
+                    )
+                    .await?;
+                }
+                Err(err) => return Err(err),
+            }
         }
         Commands::Receive {
             output,

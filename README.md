@@ -39,6 +39,12 @@ Send a file:
 localsend-cli send --to "Alice" --file ./photo.jpg
 ```
 
+Send a file with QR fallback (recommended on multi-network setups):
+
+```bash
+localsend-cli send --to "Alice" --file ./photo.jpg --qr
+```
+
 Send text:
 
 ```bash
@@ -85,6 +91,10 @@ Receiver can require a PIN:
 ```bash
 localsend-cli receive --pin 123456
 ```
+
+## QR fallback
+
+If discovery fails, `--qr` starts a local web share server and prints a terminal QR code so the receiver can open the link and download the files in a browser. By default the link uses HTTPS (self-signed).
 
 ## JSON output
 

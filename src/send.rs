@@ -13,18 +13,18 @@ use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio_util::io::ReaderStream;
 
-#[derive(Debug)]
-struct SendItem {
-    id: String,
-    file_name: String,
-    size: u64,
-    file_type: String,
-    metadata: Option<FileMetadata>,
-    data: SendData,
+#[derive(Debug, Clone)]
+pub(crate) struct SendItem {
+    pub(crate) id: String,
+    pub(crate) file_name: String,
+    pub(crate) size: u64,
+    pub(crate) file_type: String,
+    pub(crate) metadata: Option<FileMetadata>,
+    pub(crate) data: SendData,
 }
 
-#[derive(Debug)]
-enum SendData {
+#[derive(Debug, Clone)]
+pub(crate) enum SendData {
     Path(PathBuf),
     Bytes(Vec<u8>),
 }
@@ -36,6 +36,7 @@ struct SendResult {
     size: u64,
 }
 
+#[allow(dead_code)]
 pub async fn send_items(
     selector: TargetSelector,
     device_info: DeviceInfo,
@@ -50,10 +51,21 @@ pub async fn send_items(
     globs: Vec<String>,
     json: bool,
 ) -> anyhow::Result<()> {
-    let target = resolve_target(selector, device_info.clone(), tls, bind, port, timeout).await?;
     let mut temp_files = Vec::new();
     let items = build_items(text, files, dirs, globs, &mut temp_files).await?;
+    let target = resolve_target(selector, device_info.clone(), tls, bind, port, timeout).await?;
 
+    send_prepared_items(target, items, device_info, timeout, pin, json).await
+}
+
+pub(crate) async fn send_prepared_items(
+    target: DiscoveredDevice,
+    items: Vec<SendItem>,
+    device_info: DeviceInfo,
+    timeout: u64,
+    pin: Option<String>,
+    json: bool,
+) -> anyhow::Result<()> {
     if items.is_empty() {
         return Err(anyhow!("no files, directories, or text specified"));
     }
@@ -64,7 +76,7 @@ pub async fn send_items(
         .build()?;
 
     let url = format!(
-        "{}://{}:{}{}/prepare-upload", 
+        "{}://{}:{}{}/prepare-upload",
         target.info.protocol,
         target.addr,
         target.info.port,
@@ -164,7 +176,18 @@ pub async fn send_items(
     Ok(())
 }
 
-async fn resolve_target(
+#[derive(Debug)]
+pub(crate) struct NoMatchingDevice;
+
+impl std::fmt::Display for NoMatchingDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no matching device found")
+    }
+}
+
+impl std::error::Error for NoMatchingDevice {}
+
+pub(crate) async fn resolve_target(
     selector: TargetSelector,
     device_info: DeviceInfo,
     tls: Option<TlsIdentity>,
@@ -213,12 +236,12 @@ async fn resolve_target(
     let target = devices
         .into_iter()
         .find(|device| match_selector(&selector.to, device))
-        .ok_or_else(|| anyhow!("no matching device found"))?;
+        .ok_or_else(|| anyhow::Error::new(NoMatchingDevice))?;
 
     Ok(target)
 }
 
-async fn build_items(
+pub(crate) async fn build_items(
     text: Option<String>,
     files: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
