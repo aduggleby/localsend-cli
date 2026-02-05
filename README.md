@@ -45,6 +45,12 @@ Send a file with QR fallback (recommended on multi-network setups):
 localsend-cli send --to "Alice" --file ./photo.jpg --qr
 ```
 
+Start a QR web share server immediately (no discovery):
+
+```bash
+localsend-cli webshare --text "test"
+```
+
 Send text:
 
 ```bash

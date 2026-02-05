@@ -17,7 +17,7 @@ use std::path::PathBuf;
     version,
     about = "Headless LocalSend CLI",
     long_about = "A fully non-interactive LocalSend CLI for automation and LLM control.\n\nCapabilities:\n  - Discover devices on the local network\n  - Send text, files, directories, or globbed file lists\n  - Receive files with auto-accept and optional PIN\n  - QR web-share fallback when discovery fails\n\nAll options are provided as flags; no prompts are used.",
-    after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli search --to \"alex-thinkpad-2024\"\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli send --to \"Alice\" --file ./photo.jpg --qr\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
+    after_help = "Examples:\n  localsend-cli list\n  localsend-cli list --json\n  localsend-cli search --to \"alex-thinkpad-2024\"\n  localsend-cli send --to \"Alice\" --file ./photo.jpg\n  localsend-cli send --to 192.168.1.42 --text \"hello\"\n  localsend-cli send --to \"office-pc\" --dir ./project\n  localsend-cli send --direct 192.168.1.50:53317 --file ./report.pdf\n  localsend-cli send --to \"Alice\" --file ./photo.jpg --qr\n  localsend-cli webshare --text \"test\"\n  localsend-cli receive --output ./downloads\n  localsend-cli receive --pin 123456"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -121,6 +121,28 @@ enum Commands {
         /// Timeout in seconds for discovery and scan.
         #[arg(long, default_value_t = 5)]
         timeout: u64,
+    },
+    /// Start a QR web share server immediately (no discovery). Preferred for testing or manual sharing.
+    Webshare {
+        /// Optional pin required to download files.
+        #[arg(long)]
+        pin: Option<String>,
+
+        /// Send plain text.
+        #[arg(long)]
+        text: Option<String>,
+
+        /// Files to send.
+        #[arg(long, value_name = "FILE")]
+        file: Vec<PathBuf>,
+
+        /// Directories to send (will be zipped).
+        #[arg(long, value_name = "DIR")]
+        dir: Vec<PathBuf>,
+
+        /// Glob patterns to expand and send.
+        #[arg(long, value_name = "GLOB")]
+        glob: Vec<String>,
     },
 }
 
@@ -280,6 +302,20 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             anyhow::bail!("no matching device found");
+        }
+        Commands::Webshare { pin, text, file, dir, glob } => {
+            let mut temp_files = Vec::new();
+            let items = send::build_items(text, file, dir, glob, &mut temp_files).await?;
+            webshare::run_web_share(
+                items,
+                device_info,
+                identity.tls.clone(),
+                cli.bind,
+                cli.port,
+                pin,
+                cli.json,
+            )
+            .await?;
         }
     }
 
