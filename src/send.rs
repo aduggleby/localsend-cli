@@ -20,6 +20,7 @@ pub(crate) struct SendItem {
     pub(crate) size: u64,
     pub(crate) file_type: String,
     pub(crate) metadata: Option<FileMetadata>,
+    pub(crate) preview: Option<String>,
     pub(crate) data: SendData,
 }
 
@@ -93,7 +94,7 @@ pub(crate) async fn send_prepared_items(
                 size: item.size,
                 file_type: item.file_type.clone(),
                 sha256: None,
-                preview: None,
+                preview: item.preview.clone(),
                 metadata: item.metadata.clone(),
             },
         );
@@ -259,6 +260,7 @@ pub(crate) async fn build_items(
             size: bytes.len() as u64,
             file_type: "text/plain; charset=utf-8".to_string(),
             metadata: None,
+            preview: Some(String::from_utf8_lossy(&bytes).to_string()),
             data: SendData::Bytes(bytes),
         });
     }
@@ -309,6 +311,7 @@ async fn item_from_path(path: PathBuf) -> anyhow::Result<SendItem> {
         size: metadata.len(),
         file_type,
         metadata: meta,
+        preview: None,
         data: SendData::Path(path),
     })
 }
