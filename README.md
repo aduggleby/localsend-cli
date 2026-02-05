@@ -69,6 +69,12 @@ Receive files (auto-accept):
 localsend-cli receive --output ./downloads
 ```
 
+Receive exactly 1 file then exit:
+
+```bash
+localsend-cli receive --output ./downloads --max-files 1
+```
+
 ## Device selection
 
 `--to` can match any of:

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -21,6 +22,9 @@ struct ReceiverState {
     output_dir: PathBuf,
     pin: Option<String>,
     sessions: Arc<Mutex<HashMap<String, UploadSession>>>,
+    max_files: Option<u64>,
+    received: Arc<AtomicU64>,
+    shutdown: axum_server::Handle,
     json: bool,
 }
 
@@ -57,15 +61,20 @@ pub async fn run_receiver(
     output_dir: PathBuf,
     pin: Option<String>,
     announce: bool,
+    max_files: Option<u64>,
     json: bool,
 ) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(&output_dir).await?;
 
+    let shutdown = axum_server::Handle::new();
     let state = ReceiverState {
         device_info: device_info.clone(),
         output_dir,
         pin,
         sessions: Arc::new(Mutex::new(HashMap::new())),
+        max_files,
+        received: Arc::new(AtomicU64::new(0)),
+        shutdown: shutdown.clone(),
         json,
     };
 
@@ -91,14 +100,14 @@ pub async fn run_receiver(
         .await
         .context("failed to build tls config")?;
         axum_server::bind_rustls(addr, config)
+            .handle(shutdown)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     } else {
-        axum::serve(
-            tokio::net::TcpListener::bind(addr).await?,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await?;
+        axum_server::bind(addr)
+            .handle(shutdown)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await?;
     }
 
     Ok(())
@@ -237,6 +246,24 @@ async fn upload(
         );
     } else {
         println!("Received {}", target.display());
+    }
+
+    let count = state.received.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Some(max_files) = state.max_files {
+        if count >= max_files {
+            if state.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "done",
+                        "received": count
+                    })
+                );
+            } else {
+                println!("Received {count} file(s). Shutting down.");
+            }
+            state.shutdown.graceful_shutdown(None);
+        }
     }
 
     StatusCode::OK.into_response()

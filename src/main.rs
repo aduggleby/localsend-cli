@@ -111,6 +111,10 @@ enum Commands {
         /// Send a multicast announcement on startup.
         #[arg(long, default_value_t = true)]
         announce: bool,
+
+        /// Stop after receiving this many files.
+        #[arg(long)]
+        max_files: Option<u64>,
     },
     /// Search for a single device (multicast first, then scan). Preferred on multi-network setups.
     Search {
@@ -238,6 +242,7 @@ async fn main() -> anyhow::Result<()> {
             output,
             pin,
             announce,
+            max_files,
         } => {
             receive::run_receiver(
                 device_info,
@@ -247,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
                 output,
                 pin,
                 announce,
+                max_files,
                 cli.json,
             )
             .await?;
