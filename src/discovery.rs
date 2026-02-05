@@ -293,7 +293,7 @@ async fn scan_tailscale_peers(
 
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_millis(500))
+        .timeout(Duration::from_millis(800))
         .build()?;
 
     for peer in peer_map.values() {
@@ -304,26 +304,59 @@ async fn scan_tailscale_peers(
             if !matches!(ip, IpAddr::V4(_)) {
                 continue;
             }
-            let url = format!(
-                "{}://{}:{}/api/localsend/v2/register",
-                device_info.protocol, ip, device_info.port
-            );
-            let response = client.post(url).json(&device_info).send().await.ok();
-            let Some(response) = response else { continue };
-            if !response.status().is_success() {
-                continue;
+            let mut protocols = vec![device_info.protocol.clone()];
+            if device_info.protocol != "https" {
+                protocols.push("https".to_string());
             }
-            let Ok(device) = response.json::<DeviceInfo>().await else { continue };
-            let id = device_id(&device, ip);
-            let mut devices_lock = devices.lock().expect("devices lock");
-            devices_lock.insert(
-                id.clone(),
-                DiscoveredDevice {
-                    id,
-                    info: device,
-                    addr: ip,
-                },
-            );
+            if device_info.protocol != "http" {
+                protocols.push("http".to_string());
+            }
+
+            for proto in protocols {
+                let info_url = format!(
+                    "{}://{}:{}/api/localsend/v2/info",
+                    proto, ip, device_info.port
+                );
+                if let Ok(response) = client.get(info_url).send().await {
+                    if response.status().is_success() {
+                        if let Ok(device) = response.json::<DeviceInfo>().await {
+                            let id = device_id(&device, ip);
+                            let mut devices_lock = devices.lock().expect("devices lock");
+                            devices_lock.insert(
+                                id.clone(),
+                                DiscoveredDevice {
+                                    id,
+                                    info: device,
+                                    addr: ip,
+                                },
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                let register_url = format!(
+                    "{}://{}:{}/api/localsend/v2/register",
+                    proto, ip, device_info.port
+                );
+                if let Ok(response) = client.post(register_url).json(&device_info).send().await {
+                    if response.status().is_success() {
+                        if let Ok(device) = response.json::<DeviceInfo>().await {
+                            let id = device_id(&device, ip);
+                            let mut devices_lock = devices.lock().expect("devices lock");
+                            devices_lock.insert(
+                                id.clone(),
+                                DiscoveredDevice {
+                                    id,
+                                    info: device,
+                                    addr: ip,
+                                },
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
