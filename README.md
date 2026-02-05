@@ -102,6 +102,24 @@ localsend-cli receive --pin 123456
 
 If discovery fails, `--qr` starts a local web share server and prints a terminal QR code so the receiver can open the link and download the files in a browser. By default the link uses HTTPS (self-signed).
 
+## Blocking behavior
+
+Some commands are long-running or wait on other devices:
+
+- `send`: blocks while it waits for the receiver to accept and while uploads finish. If the receiver is busy, the command exits with an error.
+- `receive`: runs a server and blocks until you stop it (Ctrl+C).
+- `webshare`: runs a server and blocks until you stop it (Ctrl+C).
+
+For automation, run long-lived commands in a separate process or use your own timeout.
+
+## Learnings & protocol notes
+
+- LocalSend v2 `/prepare-upload` expects `files` as a map of `id -> file` (not a list).
+- Text messages are modeled as a file; using the `preview` field mirrors GUI behavior.
+- Some receivers return `204 No Content` for message-only transfers; treat as success.
+- Direct IP sends should probe `/info` to resolve protocol (HTTP vs HTTPS).
+- Tailscale peers may only expose HTTP on the LocalSend port; probe both.
+
 ## JSON output
 
 Use `--json` to enable machine-readable output. For example:
